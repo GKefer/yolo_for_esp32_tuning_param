@@ -1,0 +1,139 @@
+from yoloOpencv import opencvYOLO
+from PIL import ImageFont, ImageDraw, Image
+from urllib.request import urlopen
+import cv2
+import imutils
+import time
+import numpy as np
+
+yolo = opencvYOLO(modeltype="yolov3-tiny", \
+    objnames="mask_face_outsource_yolov3-tiny/obj.names", \
+    weights="mask_face_outsource_yolov3-tiny/yolov3-tiny_91000.weights",\
+    cfg="mask_face_outsource_yolov3-tiny/yolov3-tiny.cfg")
+
+labels_tw = {"none":"口罩沒有戴好", "good":"正確配戴口罩", "bad":"沒有戴口罩" }
+
+#media = "videos/Escaping Corona Virus   Аэрофлот Aeroflot B777-300ER Shanghai China to Moscow Russia Flight Review"
+write_video = True
+record_width, record_height = 640,480
+video_out = "out_o1.avi"
+output_rotate = True
+rotate = 180
+
+#ESP32-CAM
+url="http://172.30.17.165:81/stream"
+CAMERA_BUFFRER_SIZE=4096
+
+#fps count
+start = time.time()
+
+
+def fps_count(num_frames):
+    end = time.time()
+    seconds = end - start
+    fps  = num_frames / seconds;
+    print("Estimated frames per second : {0}".format(fps))
+    return fps
+
+def printText(bg, txt, color=(0,255,0,0), size=0.7, pos=(0,0), type="Chinese"):
+    (b,g,r,a) = color
+
+    if(type=="English"):
+        cv2.putText(bg,  txt, pos, cv2.FONT_HERSHEY_SIMPLEX, size,  (b,g,r), 2, cv2.LINE_AA)
+
+    else:
+        ## Use simsum.ttf to write Chinese.
+        fontpath = "fonts/wt009.ttf"
+        font = ImageFont.truetype(fontpath, int(size*10*4))
+        img_pil = Image.fromarray(bg)
+        draw = ImageDraw.Draw(img_pil)
+        draw.text(pos,  txt, font = font, fill = (b, g, r, a))
+        bg = np.array(img_pil)
+
+    return bg
+
+def read_stream():
+    global bts
+
+    bts+=stream.read(CAMERA_BUFFRER_SIZE)
+    jpghead=bts.find(b'\xff\xd8')
+    jpgend=bts.find(b'\xff\xd9')
+    print("jpghead, jpgend", jpghead,jpgend )
+    img = None
+    height,width = 0,0
+    
+    if jpghead>-1 and jpgend>-1:
+        jpg=bts[jpghead:jpgend+2]
+        bts=bts[jpgend+2:]
+            
+        try:
+            img=cv2.imdecode(np.frombuffer(jpg,dtype=np.uint8),cv2.IMREAD_UNCHANGED)    
+            #v=cv.flip(img,0)
+            #h=cv.flip(img,1)
+            #p=cv2.flip(img,-1)    
+            #frame=p
+            height,width=img.shape[:2]
+            img=cv2.resize(img,(record_width, record_height))
+            print(img.shape)
+        except:
+            img = None
+            print("no data received.")
+
+
+    return img,(width,height)
+
+bts=b''
+if __name__ == "__main__":
+    if(write_video is True):
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        out = cv2.VideoWriter(video_out,fourcc, 20.0, (record_width,record_height))
+    
+    stream=urlopen(url)
+    
+    frameID = 0
+    img = None
+
+    while True:
+
+        img, (width, height) = read_stream()
+
+        if img is not None:
+            if(output_rotate is True):
+                img = imutils.rotate(img, rotate)
+
+            yolo.getObject(img, labelWant="", drawBox=True, bold=2, textsize=0.95, bcolor=(255,255,255), tcolor=(0,255,255))
+               
+            for id, label in enumerate(yolo.labelNames):
+                x = yolo.bbox[id][0]
+                y = yolo.bbox[id][1]
+                w = yolo.bbox[id][2]
+                h = yolo.bbox[id][3]
+                cx = int(x)
+                if(cx>width): cx=width-60
+                cy = int(y-h/3)
+                if(cy<0): cy=0
+                if(label=="bad"):
+                    txt_color = (0,0,255,0)
+                elif(label=="none"):
+                    txt_color = (255,255,0,0)
+                else:
+                    txt_color = (0,255,0,0)
+
+                txt_size = round(w / 250, 1)
+                print(labels_tw[label], (w,h))
+                img = printText(bg=img, txt=labels_tw[label], color=txt_color, size=txt_size, pos=(cx,cy), type="Chinese")
+
+            cv2.imshow("Frame", img)
+            k=cv2.waitKey(1)
+            if k & 0xFF==ord('q'):
+                cv.destroyAllWindows()
+                if(write_video is True):
+                    out.release()
+
+                break
+                
+            frameID += 1
+            fps_count(frameID)
+
+            if(write_video is True):
+                out.write(img)
